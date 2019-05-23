@@ -1,0 +1,169 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Build a Hello World private API Gateway"
+
+Parameters:
+  Contact:
+    Type: "String"
+    Default: "cannereau"
+    Description: "Creator's username"
+  Application:
+    Type: "String"
+    Default: "API"
+    Description: "Application's name"
+  DomainName:
+    Type: "String"
+    Default: "api.company.com"
+    Description: "Domain name of API endpoint"    
+
+Resources:
+
+  HelloRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: "api-key-hello"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: "Allow"
+          Action: "sts:AssumeRole"
+          Principal:
+            Service: "lambda.amazonaws.com"
+      Policies:
+        - PolicyName: "lambda-default"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+            - Effect: "Allow"
+              Action:
+              - "logs:CreateLogGroup"
+              - "logs:CreateLogStream"
+              - "logs:PutLogEvents"
+              Resource:
+              - "arn:aws:logs:*:*:log-group:/aws/lambda/*"
+              - "arn:aws:logs:*:*:log-group:/aws/lambda/*:*"
+
+  HelloFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      FunctionName: "api-key-hello"
+      Description: "Function just to say Hello ;)"
+      Handler: "hello.handler"
+      Runtime: "python3.7"
+      MemorySize: 128
+      Timeout: 3
+      Role: !GetAtt HelloRole.Arn
+      Code:
+        ZipFile: "def handler(event, context):"
+      Tags:
+      -
+        Key: "Contact"
+        Value: !Ref Contact
+      -
+        Key: "Application"
+        Value: !Ref Application
+
+  HelloApiGateway:
+    Type: "AWS::ApiGateway::RestApi"
+    Properties:
+      Name: "hello"
+      EndpointConfiguration:
+        Types:
+          - "EDGE"
+
+  HelloApiMethod:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref HelloApiGateway
+      ResourceId: !GetAtt HelloApiGateway.RootResourceId
+      ApiKeyRequired: "true"
+      AuthorizationType: "NONE"
+      HttpMethod: "POST"
+      Integration:
+        IntegrationHttpMethod: "POST"
+        Type: "AWS_PROXY"
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations"
+          - lambdaArn: !GetAtt HelloFunction.Arn
+
+  HelloApiDeploy:
+    Type: "AWS::ApiGateway::Deployment"
+    DependsOn: HelloApiMethod
+    Properties:
+      RestApiId: !Ref HelloApiGateway
+
+  HelloApiStage:
+    Type: "AWS::ApiGateway::Stage"
+    Properties:
+      RestApiId: !Ref HelloApiGateway
+      DeploymentId: !Ref HelloApiDeploy
+      StageName: "prod"
+      Tags:
+      -
+        Key: "Contact"
+        Value: !Ref Contact
+      -
+        Key: "Application"
+        Value: !Ref Application
+
+  HelloPermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      FunctionName: !GetAtt HelloFunction.Arn
+      Action: "lambda:InvokeFunction"
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HelloApiGateway}/*/*/*"
+
+  HelloApiPath:
+    Type: "AWS::ApiGateway::BasePathMapping"
+    DependsOn: HelloApiStage
+    Properties:
+      RestApiId: !Ref HelloApiGateway
+      DomainName: !Ref DomainName
+      BasePath: "hello"
+      Stage: "prod"
+
+  HelloApiKey:
+    Type: "AWS::ApiGateway::ApiKey"
+    DependsOn: HelloApiStage
+    Properties:
+      Name: "hello-key"
+      Description: "Hello API Key"
+      Enabled: "true"
+      StageKeys:
+      -
+        RestApiId: !Ref HelloApiGateway
+        StageName: "prod"
+
+  HelloApiPlan:
+    Type: "AWS::ApiGateway::UsagePlan"
+    Properties:
+      UsagePlanName: "hello-plan"
+      Description: "Plan to say Hello"
+      Quota:
+        Limit: 1000
+        Period: "DAY"
+      Throttle:
+        RateLimit: 100
+        BurstLimit: 200
+      ApiStages:
+      - ApiId: !Ref HelloApiGateway
+        Stage: "prod"
+
+  HelloApiPlanKey:
+    Type: "AWS::ApiGateway::UsagePlanKey"
+    Properties : 
+      KeyId: !Ref HelloApiKey
+      KeyType: "API_KEY"
+      UsagePlanId: !Ref HelloApiPlan
+
+Outputs:
+  ApiEndpoint:
+    Description: "API Gateway's endpoint"
+    Value: !Sub "https://${DomainName}/hello"
+    Export:
+      Name: !Sub "${AWS::StackName}-endpoint"
+  ApiKey:
+    Description: "API Key ID"
+    Value: !Ref HelloApiKey
+    Export:
+      Name: !Sub "${AWS::StackName}-key-id"
